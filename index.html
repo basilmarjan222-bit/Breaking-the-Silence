@@ -2589,16 +2589,19 @@
      JAVASCRIPT
 ══════════════════════════════════════════ -->
 <script>
-  /* ── Supabase config ──────────────────────────────────────
-     Replace with your real Supabase project URL and anon key.
+  /* ── Supabase project connection — hardcoded so ALL devices/visitors use the
+     SAME backend (this is safe to expose: the anon key is meant to be public;
+     access is controlled by Row Level Security policies on the Supabase side).
      Tables needed:
        stories  → name, country, age (int), story, anonymous (bool), created_at
        feedback → name, country, age (int), rating (int), feedback, created_at
   ───────────────────────────────────────────────────────── */
+  const SUPABASE_URL = 'https://zxhpwvigrdupcmiyezmv.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp4aHB3dmlncmR1cGNtaXllem12Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxOTkyNDYsImV4cCI6MjA5Mjc3NTI0Nn0.9hSqhOA6-yDBsD5aEpDNzAKFLKt7ilEpGbGVGBtquRM';
 
-  /* ── Supabase credentials — read from localStorage (set via Admin → Settings) ── */
-  function getSupabaseURL() { return localStorage.getItem('adm_sb_url') || ''; }
-  function getSupabaseKey() { return localStorage.getItem('adm_sb_key') || ''; }
+  /* ── Supabase credentials — hardcoded above; localStorage kept only as an override for testing ── */
+  function getSupabaseURL() { return localStorage.getItem('adm_sb_url') || SUPABASE_URL; }
+  function getSupabaseKey() { return localStorage.getItem('adm_sb_key') || SUPABASE_ANON_KEY; }
   function checkSupabase(msgBox) {
     if (!getSupabaseURL() || !getSupabaseKey()) {
       showMsg(msgBox, 'error', '⚠️ Site not connected yet. Please try again later.');
@@ -2947,8 +2950,8 @@
     <div class="adm-login-box">
       <div class="adm-login-title">Breaking the <span>Silence</span></div>
       <div class="adm-login-sub">Admin Panel · Restricted Access</div>
-      <input class="adm-input" type="text"     id="adm-u" placeholder="Username" autocomplete="off">
-      <input class="adm-input" type="password" id="adm-p" placeholder="Password"
+      <input class="adm-input" type="email"    id="adm-u" placeholder="Admin email" autocomplete="username">
+      <input class="adm-input" type="password" id="adm-p" placeholder="Password" autocomplete="current-password"
              onkeydown="if(event.key==='Enter')admLogin()">
       <button class="adm-login-btn" onclick="admLogin()">Sign In →</button>
       <div class="adm-login-err" id="adm-err"></div>
@@ -3377,10 +3380,12 @@
             </div>
             <div class="adm-card">
               <div class="adm-card-ttl">🔑 Admin Login</div>
-              <div class="adm-fld"><label>Username</label><input type="text" id="set-user" placeholder="admin"></div>
-              <div class="adm-fld"><label>New Password</label><input type="password" id="set-pw1" placeholder="Enter new password"></div>
+              <div class="adm-fld"><label>Admin Email</label><input type="email" id="set-user" placeholder="you@example.com"></div>
+              <div class="adm-fld"><label>Current Password <span style="color:rgba(255,255,255,.35);font-size:.72rem;">(required to change email/password)</span></label><input type="password" id="set-pw-current" placeholder="Enter current password"></div>
+              <div class="adm-fld"><label>New Password <span style="color:rgba(255,255,255,.35);font-size:.72rem;">(leave blank to keep current)</span></label><input type="password" id="set-pw1" placeholder="Enter new password"></div>
               <div class="adm-fld"><label>Confirm</label><input type="password" id="set-pw2" placeholder="Confirm new password"></div>
               <button class="adm-btn adm-btn-p" onclick="settingsPw()">Update Login</button>
+              <button class="adm-btn adm-btn-gh" style="margin-left:.5rem;" onclick="admLogout()">Sign Out</button>
             </div>
           </div>
           <div>
@@ -3533,9 +3538,41 @@
    ADMIN PANEL JAVASCRIPT
 ══════════════════════════════════════════════════════ */
 
-/* ── Credentials (stored in localStorage) ── */
-let admUsername = localStorage.getItem('adm_user') || 'admin';
-let admPassword = localStorage.getItem('adm_pw') || 'admin123';
+/* ── Real admin session (Supabase Auth) — replaces the old fake localStorage
+   username/password check. Only a properly authenticated admin can now read
+   private submissions once the RLS policies below are applied. ── */
+let sbSession = (() => { try { return JSON.parse(localStorage.getItem('adm_sb_session') || 'null'); } catch(e) { return null; } })();
+
+function sbIsLoggedIn() {
+  return !!(sbSession && sbSession.access_token && sbSession.expires_at > Date.now());
+}
+// Authorization token to use for requests: the admin's real session when logged in, otherwise the public anon key
+function sbAuthToken() {
+  return sbIsLoggedIn() ? sbSession.access_token : sbKey();
+}
+
+async function sbSignIn(email, password) {
+  const url = sbUrl(), key = sbKey();
+  const r = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error_description || data.msg || data.error || 'Invalid email or password.');
+  sbSession = {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    email: data.user && data.user.email,
+    expires_at: Date.now() + ((data.expires_in || 3600) * 1000)
+  };
+  localStorage.setItem('adm_sb_session', JSON.stringify(sbSession));
+}
+
+function sbSignOut() {
+  sbSession = null;
+  localStorage.removeItem('adm_sb_session');
+}
 
 /* ── Global admin state (must exist before applyAllSettings/pubGalleryRender run below) ── */
 let currentPanel  = 'dashboard';
@@ -3543,16 +3580,17 @@ let storiesFilter = 'all';
 let coversFilter  = 'all';
 let galAlbums     = JSON.parse(localStorage.getItem('adm_albums') || '[]');
 
-/* ── Supabase config (saved in settings) ── */
-function sbUrl() { return localStorage.getItem('adm_sb_url') || (typeof SUPABASE_URL !== 'undefined' ? SUPABASE_URL : ''); }
-function sbKey() { return localStorage.getItem('adm_sb_key') || (typeof SUPABASE_ANON_KEY !== 'undefined' ? SUPABASE_ANON_KEY : ''); }
+/* ── Supabase config: hardcoded project takes priority so every device/visitor
+   talks to the same backend; localStorage only overrides if explicitly set ── */
+function sbUrl() { return (typeof SUPABASE_URL !== 'undefined' && SUPABASE_URL) ? SUPABASE_URL : (localStorage.getItem('adm_sb_url') || ''); }
+function sbKey() { return (typeof SUPABASE_ANON_KEY !== 'undefined' && SUPABASE_ANON_KEY) ? SUPABASE_ANON_KEY : (localStorage.getItem('adm_sb_key') || ''); }
 
 async function sbFetch(table, params='') {
   const url = sbUrl();
   const key = sbKey();
   if (!url || !key || url.includes('YOUR_PROJECT')) throw new Error('Supabase not configured. Go to Settings.');
   const r = await fetch(`${url}/rest/v1/${table}${params}`, {
-    headers: { apikey: key, Authorization: `Bearer ${key}` }
+    headers: { apikey: key, Authorization: `Bearer ${sbAuthToken()}` }
   });
   if (!r.ok) {
     let detail = `${r.status}`;
@@ -3560,6 +3598,67 @@ async function sbFetch(table, params='') {
     throw new Error(detail);
   }
   return r.json();
+}
+
+/* ── Upsert helper: writes a row to any table via PostgREST (used for site_settings sync) ── */
+async function sbUpsert(table, row, conflictCol) {
+  const url = sbUrl();
+  const key = sbKey();
+  if (!url || !key || url.includes('YOUR_PROJECT')) throw new Error('Supabase not configured.');
+  const r = await fetch(`${url}/rest/v1/${table}?on_conflict=${conflictCol}`, {
+    method: 'POST',
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${sbAuthToken()}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates,return=minimal'
+    },
+    body: JSON.stringify(row)
+  });
+  if (!r.ok) {
+    let detail = `${r.status}`;
+    try { const body = await r.json(); detail = body.message || body.hint || body.details || detail; } catch(e) {}
+    throw new Error(detail);
+  }
+}
+
+/* ── File Storage helpers: upload/delete real files (photos, PDFs) to the
+   Supabase Storage "media" bucket, so files live on the server and are
+   visible from every device, instead of being stuck in one browser ── */
+const SB_STORAGE_BUCKET = 'media';
+
+async function sbStorageUpload(file, folder) {
+  const url = sbUrl(), key = sbKey();
+  if (!url || !key) throw new Error('Supabase not configured.');
+  const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+  const path = `${folder}/${Date.now()}_${safeName}`;
+  const r = await fetch(`${url}/storage/v1/object/${SB_STORAGE_BUCKET}/${path}`, {
+    method: 'POST',
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${sbAuthToken()}`,
+      'Content-Type': file.type || 'application/octet-stream',
+      'x-upsert': 'true'
+    },
+    body: file
+  });
+  if (!r.ok) {
+    let detail = `${r.status}`;
+    try { const body = await r.json(); detail = body.message || body.error || detail; } catch(e) {}
+    throw new Error(detail);
+  }
+  return { url: `${url}/storage/v1/object/public/${SB_STORAGE_BUCKET}/${path}`, path };
+}
+
+async function sbStorageDelete(path) {
+  if (!path) return;
+  const url = sbUrl(), key = sbKey();
+  try {
+    await fetch(`${url}/storage/v1/object/${SB_STORAGE_BUCKET}/${path}`, {
+      method: 'DELETE',
+      headers: { apikey: key, Authorization: `Bearer ${sbAuthToken()}` }
+    });
+  } catch(e) { console.warn('Storage delete failed:', e.message); }
 }
 
 /* ── Trigger: triple-click "Muhammed Basil" ── */
@@ -3576,14 +3675,53 @@ document.querySelectorAll('.footer-name').forEach(el => {
    SITE SETTINGS SYSTEM — save to localStorage, apply instantly to public pages
    ══════════════════════════════════════════════════ */
 
-// Generic save helper
+// Keys that get synced to Supabase so they update on EVERY device, not just
+// the browser that changed them. (Large binary fields — PDFs/cover images —
+// are intentionally excluded here and stay device-local for now.)
+const SYNCED_SETTING_KEYS = new Set([
+  'email','ig','phone','woi',
+  'stories_enabled','feedback_enabled','gallery_enabled',
+  'mag_disabled','mag_embed','mag_download',
+  'poem_open','poem_deadline','poem_closed_msg',
+  'cover_open','cover_deadline','cover_closed_msg',
+  // These now hold small Supabase Storage URLs (not base64 files), safe to sync
+  'mag_cover_img','mag_pdf_data','mag_edition'
+]);
+
+// Generic save helper — saves locally instantly, and syncs to Supabase in the background
 function siteSettingSave(key, value) {
   localStorage.setItem('site_' + key, JSON.stringify(value));
+  if (SYNCED_SETTING_KEYS.has(key)) {
+    sbUpsert('site_settings', { key: key, value: value }, 'key').catch(e => {
+      console.warn('Site setting "' + key + '" saved locally but failed to sync:', e.message);
+    });
+  }
 }
 function siteSettingGet(key, fallback) {
   const v = localStorage.getItem('site_' + key);
   if (v === null) return fallback;
   try { return JSON.parse(v); } catch(e) { return fallback; }
+}
+
+// Pulls the latest synced settings from Supabase on page load, so any device
+// (not just the one that made the change) shows the current info, photos, and files.
+const RAW_SYNCED_KEYS = new Set(['adm_albums', 'adm_media']); // these don't use the 'site_' prefix
+async function syncSiteSettingsFromCloud() {
+  try {
+    const rows = await sbFetch('site_settings', '?select=key,value');
+    rows.forEach(row => {
+      const storageKey = RAW_SYNCED_KEYS.has(row.key) ? row.key : ('site_' + row.key);
+      localStorage.setItem(storageKey, JSON.stringify(row.value));
+    });
+    // Refresh in-memory copies + re-render anything visible right now
+    galAlbums   = JSON.parse(localStorage.getItem('adm_albums') || '[]');
+    mediaFiles  = JSON.parse(localStorage.getItem('adm_media')  || '[]');
+    if (typeof applyAllSettingsRefresh === 'function') applyAllSettingsRefresh();
+    if (document.getElementById('media-list'))       mediaLoad();
+    if (document.getElementById('adm-albums-list'))  albumsLoad();
+  } catch (e) {
+    console.warn('Could not sync site settings from Supabase:', e.message);
+  }
 }
 
 /* ── 1. Working-On-It Banner ──────────────────── */
@@ -3711,12 +3849,18 @@ function admOpen() {
   document.getElementById('adm-overlay').classList.add('open');
   document.body.style.overflow = 'hidden';
 
+  // Skip login if already signed in with a valid session
+  if (sbIsLoggedIn()) {
+    document.getElementById('adm-login').style.display = 'none';
+    document.getElementById('adm-shell').classList.add('show');
+  }
+
   // Supabase connection
   document.getElementById('set-url').value = localStorage.getItem('adm_sb_url') || '';
   document.getElementById('set-key').value = localStorage.getItem('adm_sb_key') || '';
 
   // Login credentials
-  document.getElementById('set-user').value = admUsername;
+  document.getElementById('set-user').value = (sbSession && sbSession.email) || '';
 
   // Site Info fields
   document.getElementById('set-email').value = siteSettingGet('email', '');
@@ -3786,8 +3930,8 @@ function admOpen() {
   document.getElementById('cover-closed-msg').value = siteSettingGet('cover_closed_msg', '');
 }
 
-/* ── Apply ALL settings on page load ──────────── */
-(function applyAllSettings() {
+/* ── Apply ALL settings — runs on page load, and again after cloud sync ── */
+function applyAllSettingsRefresh() {
   applyWorkingOnItBanner(siteSettingGet('woi', true));
   applyStoriesToggle(siteSettingGet('stories_enabled',  true));
   applyFeedbackToggle(siteSettingGet('feedback_enabled', true));
@@ -3803,7 +3947,10 @@ function admOpen() {
   applyCoverSubmissions(siteSettingGet('cover_open', true));
   applyCoverDeadline(siteSettingGet('cover_deadline', ''));
   pubGalleryRender();
-})();
+}
+applyAllSettingsRefresh();
+// Then check Supabase for the latest values from any other device and re-apply if needed
+syncSiteSettingsFromCloud();
 
 function admClose() {
   document.getElementById('adm-overlay').classList.remove('open');
@@ -3815,18 +3962,31 @@ function admClose() {
   document.body.style.overflow = '';
 }
 
-function admLogin() {
+async function admLogin() {
   const u = document.getElementById('adm-u').value.trim();
-  const p = document.getElementById('adm-p').value.trim();
-  if (u === admUsername && p === admPassword) {
+  const p = document.getElementById('adm-p').value;
+  const e = document.getElementById('adm-err');
+  const btn = document.querySelector('.adm-login-btn');
+  if (!u || !p) { e.textContent = 'Enter your email and password.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+  try {
+    await sbSignIn(u, p);
     document.getElementById('adm-login').style.display = 'none';
     document.getElementById('adm-shell').classList.add('show');
+    document.getElementById('adm-p').value = '';
     admPanel('dashboard');
-  } else {
-    const e = document.getElementById('adm-err');
-    e.textContent = 'Incorrect username or password.';
-    setTimeout(() => e.textContent = '', 3000);
+  } catch(err) {
+    e.textContent = err.message || 'Incorrect email or password.';
+    setTimeout(() => e.textContent = '', 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sign In →'; }
   }
+}
+
+function admLogout() {
+  sbSignOut();
+  admClose();
+  admToast('Signed out.');
 }
 
 document.addEventListener('keydown', e => {
@@ -4000,7 +4160,7 @@ async function storyAction(id, status) {
   try {
     const r = await fetch(`${url}/rest/v1/stories?id=eq.${id}`, {
       method: 'PATCH',
-      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: { apikey: key, Authorization: `Bearer ${sbAuthToken()}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({ status })
     });
     if (r.ok) { admToast(`Story ${status}!`); storiesLoad(storiesFilter); }
@@ -4053,7 +4213,7 @@ async function fbDelete(id) {
   try {
     const r = await fetch(`${url}/rest/v1/feedback?id=eq.${id}`, {
       method: 'DELETE',
-      headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' }
+      headers: { apikey: key, Authorization: `Bearer ${sbAuthToken()}`, Prefer: 'return=minimal' }
     });
     if (r.ok) { admToast('Deleted.'); feedbackLoad(); }
     else admErr('Delete failed: ' + r.status);
@@ -4111,6 +4271,9 @@ let galActiveAlbum = null; // id of album currently selected in admin
 
 function albumsSave() {
   localStorage.setItem('adm_albums', JSON.stringify(galAlbums));
+  sbUpsert('site_settings', { key: 'adm_albums', value: galAlbums }, 'key').catch(e => {
+    console.warn('Gallery sync failed:', e.message);
+  });
 }
 
 /* ── Admin: Create album ── */
@@ -4179,7 +4342,8 @@ function albumDeselect() {
 /* ── Admin: Delete album ── */
 function albumDelete(i) {
   if (!confirm(`Delete album "${galAlbums[i].name}"? All photos inside will be lost.`)) return;
-  galAlbums.splice(i, 1);
+  const [removed] = galAlbums.splice(i, 1);
+  if (removed && removed.photos) removed.photos.forEach(p => { if (p.path) sbStorageDelete(p.path); });
   albumsSave();
   admToast('Album deleted.');
   albumsLoad();
@@ -4211,32 +4375,32 @@ function galLoad() {
   pubGalleryRender();
 }
 
-/* ── Admin: Upload photos into active album ── */
-function galUpload(event) {
+/* ── Admin: Upload photos into active album (real files → Supabase Storage) ── */
+async function galUpload(event) {
   const alb = galAlbums.find(a => a.id === galActiveAlbum);
   if (!alb) { admToast('⚠️ No album selected'); return; }
-  const files = Array.from(event.target.files);
+  const files = Array.from(event.target.files).filter(f => f.type.startsWith('image/'));
+  if (!files.length) { event.target.value = ''; return; }
   const preview = document.getElementById('gal-preview');
+  admToast(`Uploading ${files.length} photo(s)…`);
   let done = 0;
-  files.forEach(f => {
-    if (!f.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = e => {
-      alb.photos.unshift({ src: e.target.result, name: f.name, date: new Date().toLocaleDateString() });
-      albumsSave();
+  for (const f of files) {
+    try {
+      const { url, path } = await sbStorageUpload(f, `gallery/${alb.id}`);
+      alb.photos.unshift({ src: url, path, name: f.name, date: new Date().toLocaleDateString() });
       const img = document.createElement('img');
-      img.src = e.target.result;
+      img.src = url;
       img.style.cssText = 'width:72px;height:72px;object-fit:cover;border-radius:8px;border:2px solid rgba(162,123,91,.35);';
       preview.appendChild(img);
       done++;
-      if (done === files.length) {
-        admToast(`${done} photo(s) added to "${alb.name}"!`);
-        galLoad();
-        albumsLoad();
-      }
-    };
-    reader.readAsDataURL(f);
-  });
+    } catch(e) {
+      admErr(`Failed to upload ${f.name}: ${e.message}`);
+    }
+  }
+  albumsSave();
+  if (done) admToast(`${done} photo(s) added to "${alb.name}"!`);
+  galLoad();
+  albumsLoad();
   event.target.value = '';
 }
 
@@ -4244,7 +4408,8 @@ function galUpload(event) {
 function galDelete(i) {
   const alb = galAlbums.find(a => a.id === galActiveAlbum);
   if (!alb) return;
-  alb.photos.splice(i, 1);
+  const [removed] = alb.photos.splice(i, 1);
+  if (removed && removed.path) sbStorageDelete(removed.path);
   albumsSave();
   admToast('Photo removed.');
   galLoad();
@@ -4412,31 +4577,32 @@ function applyAnnouncements() {
 }
 
 /* ══ MAGAZINE — Live Admin → Public ══════════════════ */
-function magCoverChosen(event) {
+async function magCoverChosen(event) {
   const file = event.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const dataUrl = e.target.result;
+  admToast('Uploading cover image…');
+  try {
+    const { url } = await sbStorageUpload(file, 'magazine/covers');
     // Show preview in admin
-    document.getElementById('mag-cover-preview-img').src = dataUrl;
+    document.getElementById('mag-cover-preview-img').src = url;
     document.getElementById('mag-cover-preview-wrap').style.display = 'block';
     document.getElementById('mag-cover-ico').style.display = 'none';
     document.getElementById('mag-cover-lbl').textContent = '✓ ' + file.name;
     // Show in live preview
     const prev = document.getElementById('mag-preview-cover-img');
-    prev.src = dataUrl; prev.style.display = 'block';
-    // Save to localStorage for persistence
-    siteSettingSave('mag_cover_img', dataUrl);
+    prev.src = url; prev.style.display = 'block';
+    // Save (syncs to Supabase — every device will see it)
+    siteSettingSave('mag_cover_img', url);
     // Apply to public page immediately
     const pubImg = document.getElementById('pub-mag-cover-img');
-    if (pubImg) { pubImg.src = dataUrl; pubImg.style.display = 'block'; }
+    if (pubImg) { pubImg.src = url; pubImg.style.display = 'block'; }
     document.getElementById('mag-cover-remove-btn').style.display = 'block';
     const placeholder = document.getElementById('mag-cover-placeholder');
     if (placeholder) placeholder.style.display = 'none';
     admToast('✅ Cover image uploaded — save to push to public site.');
-  };
-  reader.readAsDataURL(file);
+  } catch(e) {
+    admErr('Cover upload failed: ' + e.message);
+  }
 }
 
 function magLivePreview() {
@@ -4451,24 +4617,25 @@ function magLivePreview() {
   document.getElementById('mag-preview-year').textContent    = `First Edition · ${year}`;
 }
 
-function magPdfChosen(event) {
+async function magPdfChosen(event) {
   const file = event.target.files[0];
   if (!file) return;
   if (file.type !== 'application/pdf') { admErr('Please select a PDF file.'); return; }
   if (file.size > 200 * 1024 * 1024) { admErr('PDF is too large. Maximum size is 200 MB.'); return; }
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const dataUrl = e.target.result;
-    siteSettingSave('mag_pdf_data', dataUrl);
+  admToast('Uploading PDF… this may take a moment for large files.');
+  try {
+    const { url } = await sbStorageUpload(file, 'magazine/pdfs');
+    siteSettingSave('mag_pdf_data', url);
     document.getElementById('mag-pdf-ico').textContent = '\u2705';
     document.getElementById('mag-pdf-lbl').textContent = '\u2713 ' + file.name;
     const chosenEl = document.getElementById('mag-pdf-chosen');
     chosenEl.style.display = 'block';
     chosenEl.textContent = '\ud83d\udcc4 ' + file.name + ' (' + (file.size/1024/1024).toFixed(1) + ' MB) — ready to save';
     document.getElementById('mag-pdf-remove-btn').style.display = 'block';
-    admToast('\ud83d\udcc4 PDF loaded — click Save to publish.');
-  };
-  reader.readAsDataURL(file);
+    admToast('\ud83d\udcc4 PDF uploaded — click Save to publish.');
+  } catch(e) {
+    admErr('PDF upload failed: ' + e.message + ' (Note: Supabase\'s free tier defaults to a 50MB upload limit — raise it in Project Settings → Storage if needed.)');
+  }
 }
 
 function magRemovePdf() {
@@ -4770,7 +4937,7 @@ async function coverAction(id, status) {
   try {
     await fetch(`${url}/rest/v1/covers?id=eq.${id}`, {
       method: 'PATCH',
-      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: { apikey: key, Authorization: `Bearer ${sbAuthToken()}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({ status })
     });
     admToast(`Cover ${status}!`); coversLoad(coversFilter);
@@ -4916,17 +5083,22 @@ async function poemAction(id, status) {
   try {
     await fetch(`${url}/rest/v1/poems?id=eq.${id}`, {
       method: 'PATCH',
-      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: { apikey: key, Authorization: `Bearer ${sbAuthToken()}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({ status })
     });
     admToast(`Poem ${status}!`); poemsLoad();
   } catch(e) { admErr(e.message); }
 }
 
-/* ══ MEDIA LIBRARY (localStorage) ════════════════════ */
+/* ══ MEDIA LIBRARY (real files → Supabase Storage) ════════════════════ */
 let mediaFiles = JSON.parse(localStorage.getItem('adm_media')||'[]');
 
-function mediaSave() { localStorage.setItem('adm_media', JSON.stringify(mediaFiles)); }
+function mediaSave() {
+  localStorage.setItem('adm_media', JSON.stringify(mediaFiles));
+  sbUpsert('site_settings', { key: 'adm_media', value: mediaFiles }, 'key').catch(e => {
+    console.warn('Media library sync failed:', e.message);
+  });
+}
 
 function mediaLoad() {
   const el = document.getElementById('media-list');
@@ -4936,7 +5108,7 @@ function mediaLoad() {
       <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Date</th><th></th></tr></thead>
       <tbody>${mediaFiles.map((f,i)=>`
         <tr>
-          <td>${f.name}</td>
+          <td>${f.url ? `<a href="${f.url}" target="_blank" rel="noopener" style="color:#A27B5B;">${esc(f.name)}</a>` : esc(f.name)}</td>
           <td><span class="adm-badge b-info">${f.ext}</span></td>
           <td>${f.size}</td>
           <td>${f.date}</td>
@@ -4947,19 +5119,36 @@ function mediaLoad() {
     </table>`;
 }
 
-function mediaUpload(event) {
-  Array.from(event.target.files).forEach(f => {
-    mediaFiles.unshift({
-      name: f.name,
-      ext:  f.name.split('.').pop().toUpperCase(),
-      size: f.size > 1048576 ? (f.size/1048576).toFixed(1)+' MB' : (f.size/1024).toFixed(0)+' KB',
-      date: new Date().toLocaleDateString()
-    });
-  });
-  mediaSave(); mediaLoad(); admToast(event.target.files.length + ' file(s) added.');
+async function mediaUpload(event) {
+  const files = Array.from(event.target.files);
+  if (!files.length) return;
+  admToast(`Uploading ${files.length} file(s)…`);
+  let done = 0;
+  for (const f of files) {
+    try {
+      const { url, path } = await sbStorageUpload(f, 'media-library');
+      mediaFiles.unshift({
+        name: f.name,
+        ext:  f.name.split('.').pop().toUpperCase(),
+        size: f.size > 1048576 ? (f.size/1048576).toFixed(1)+' MB' : (f.size/1024).toFixed(0)+' KB',
+        date: new Date().toLocaleDateString(),
+        url, path
+      });
+      done++;
+    } catch(e) {
+      admErr(`Failed to upload ${f.name}: ${e.message}`);
+    }
+  }
+  mediaSave(); mediaLoad();
+  if (done) admToast(done + ' file(s) uploaded.');
+  event.target.value = '';
 }
 
-function mediaDelete(i) { mediaFiles.splice(i,1); mediaSave(); mediaLoad(); admToast('Deleted.'); }
+function mediaDelete(i) {
+  const [removed] = mediaFiles.splice(i,1);
+  if (removed && removed.path) sbStorageDelete(removed.path);
+  mediaSave(); mediaLoad(); admToast('Deleted.');
+}
 
 /* ══ SETTINGS ════════════════════════════════════════ */
 function settingsSave() {
@@ -4984,18 +5173,47 @@ async function settingsTest() {
   }
 }
 
-function settingsPw() {
-  const u  = document.getElementById('set-user').value.trim();
+async function settingsPw() {
+  const newEmail = document.getElementById('set-user').value.trim();
+  const currentPw = document.getElementById('set-pw-current').value;
   const p1 = document.getElementById('set-pw1').value;
   const p2 = document.getElementById('set-pw2').value;
-  if (p1 && p1 !== p2) { admErr('Passwords do not match.'); return; }
-  if (!u && !p1) { admErr('Enter a username or new password.'); return; }
-  if (u) { admUsername = u; localStorage.setItem('adm_user', u); }
-  if (p1) { admPassword = p1; localStorage.setItem('adm_pw', p1); }
-  admToast('Login details updated!');
-  document.getElementById('set-pw1').value = '';
-  document.getElementById('set-pw2').value = '';
-  document.getElementById('set-user').value = admUsername;
+  if (p1 && p1 !== p2) { admErr('New passwords do not match.'); return; }
+  if (!newEmail) { admErr('Enter your admin email.'); return; }
+  if (!currentPw) { admErr('Enter your current password to confirm this change.'); return; }
+  if (!sbSession || !sbSession.email) { admErr('Please sign out and sign back in first.'); return; }
+
+  try {
+    // Re-verify identity with current password before allowing any change
+    await sbSignIn(sbSession.email, currentPw);
+
+    const url = sbUrl(), key = sbKey();
+    const body = {};
+    if (newEmail !== sbSession.email) body.email = newEmail;
+    if (p1) body.password = p1;
+    if (Object.keys(body).length === 0) { admToast('Nothing to update.'); return; }
+
+    const r = await fetch(`${url}/auth/v1/user`, {
+      method: 'PUT',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${sbAuthToken()}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.msg || data.error_description || 'Update failed.');
+
+    admToast(body.email
+      ? '✅ Check your new email inbox to confirm the change.'
+      : '✅ Password updated!');
+    document.getElementById('set-pw-current').value = '';
+    document.getElementById('set-pw1').value = '';
+    document.getElementById('set-pw2').value = '';
+  } catch(err) {
+    admErr('Could not update login: ' + err.message);
+  }
 }
 
 /* ══ HELPERS ════════════════════════════════════════ */
