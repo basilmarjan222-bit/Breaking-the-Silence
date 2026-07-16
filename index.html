@@ -296,12 +296,14 @@
       display: block;
       position: relative;
       min-height: 100dvh;
+      background: #2C3639;
     }
-    /* Photo becomes a full-bleed background behind the text */
+    /* Photo sits in the top half only, rest of the hero is solid dark */
     .hero-right-panel {
       display: block;
       position: absolute;
-      inset: 0;
+      top: 0; left: 0; right: 0;
+      height: 58vh;
       z-index: 0;
     }
     .hero-right-panel img {
@@ -309,9 +311,9 @@
       object-fit: cover;
       filter: brightness(0.9);
     }
-    /* Dark gradient so the text at the bottom stays readable over the photo */
+    /* Dark gradient blends the photo smoothly into the solid panel below it */
     .hero-right-panel::before {
-      background: linear-gradient(180deg, rgba(44,54,57,0.18) 30%, rgba(44,54,57,0.97) 82%);
+      background: linear-gradient(180deg, rgba(44,54,57,0.1) 0%, rgba(44,54,57,0.55) 65%, rgba(44,54,57,1) 100%);
     }
     .hero-left-panel {
       position: relative; z-index: 1;
